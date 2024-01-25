@@ -1,2 +1,2 @@
 # Customer-churn-prediction
-Using Tidymodels to predict customer churn
+Process for developing a machine learning model to predict customer churn or attrition. The process involves simple data exploration/analysis before training and testing two models. The specific task is classification, i.e. predicting which customers will churn and which will not. Two models commonly used for classification were chosen: logistic regression and random forest.
