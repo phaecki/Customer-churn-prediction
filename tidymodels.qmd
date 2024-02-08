@@ -14,7 +14,7 @@ Dieses Dokument beschreibt einen Prozess zur Entwicklung eines maschinellen Lern
 
 ## Datenexploration/-analyse
 
-Es ist wichtig, dass wir uns mit dem Datensatz, mit dem wir arbeiten, vertraut machen und ihn verstehen, bevor wir beginnen.
+Es ist wichtig, dass wir uns mit dem Datensatz vertraut machen und ihn verstehen, bevor wir beginnen.
 
 ```{r}
 #| message: false
@@ -23,7 +23,10 @@ Es ist wichtig, dass wir uns mit dem Datensatz, mit dem wir arbeiten, vertraut m
 
 library(tidyverse)
 library(tidymodels)
+library(caret)
 library(corrplot)
+library(DALEXtra)
+library(lime)
 library(ranger)
 library(skimr)
 library(themis)
@@ -64,7 +67,7 @@ Aus der Datenexploration gewinnen wir verschiedene Informationen. Zunächst einm
 
 Was die anderen numerischen Variablen betrifft, so können wir feststellen, dass sie in ihrer Grössenordnung stark variieren und dass keine von ihnen einer Normalverteilung entspricht. Wir werden uns dies in Kürze anhand einiger grösserer Diagramme genauer ansehen, aber wir müssen diese Hürden überwinden, wenn wir mit der logistischen Regression auch nur annähernd genaue Vorhersagen machen wollen.
 
-Wir haben nicht viele fehlende Werte, aber sie sind da. Zum Glück beschränken sie sich auf eine Spalte, TotalCharges. Fehlende Werte sind in erster Linie eine Herausforderung für Random Forest. Deshalb müssen wir bei der Erstellung des Modells einen Weg für den Umgang mit diesem Problem finden.
+Wir haben nicht viele fehlende Werte, aber sie sind da. Zum Glück beschränken sie sich auf die Spalte TotalCharges. Fehlende Werte sind in erster Linie eine Herausforderung für Random Forest. Deshalb müssen wir bei der Erstellung des Modells einen Weg für den Umgang mit diesem Problem finden.
 
 Ein weiterer Punkt, den wir überprüfen müssen, ist die Verteilung der Kundenfluktuation. Wie viele von beiden Werten sind im Datensatz enthalten?
 
@@ -75,7 +78,7 @@ telco_data %>%
                                           digits = 1))
 ```
 
-Was wir sehen, ist ein erhebliches Ungleichgewicht bzw. ein ungefähres Verhältnis von 75/25 für Nein/Ja. Unausgewogene Daten sind ein Problem, da sie Vorhersagen erschweren und den Wert bestimmter Metriken zunichte machen. Die **Accuracy** (Richtigkeit) kann zum Beispiel völlig irreführend sein, da der 75er-Anteil den kleineren und manchmal wertvolleren Anteil überwiegt. Zum Glück lassen sich unausgewogene Daten mit bestimmten Methoden korrigieren. Eine erste ist die **Data Stratification** (Datenschichtung). Durch diese Technik wird erreicht, dass der kleinere Datensatz die gleiche statistische Aufschlüsselung aufweist wie der grössere. Wir können die Schichtung auf unsere Abwanderungsspalte anwenden und so sicherstellen, dass alle Stichproben die wir ziehen, in etwa die Verteilung des Hauptdatensatzes repräsentieren. Die zweite Technik ist das **Up-Sampling**, das mit dem `themis`-Paket durchgeführt wird. Bei dieser Technik werden so lange Stichproben gezogen, bis die beiden Teile des Faktors, in unserem Fall «Ja» und «Nein», in ihrer Häufigkeit gleich sind. In diesem Projekt wurden beide Techniken angewandt.
+Was wir sehen, ist ein erhebliches Ungleichgewicht bzw. ein ungefähres Verhältnis von 75/25 für Nein/Ja. Unausgewogene Daten (imbalanced data) sind ein Problem, da sie Vorhersagen erschweren und den Wert bestimmter Metriken zunichte machen. Die **Accuracy** (Richtigkeit) kann zum Beispiel völlig irreführend sein, da der 75er-Anteil den kleineren und manchmal wertvolleren Anteil überwiegt. Zum Glück lassen sich unausgewogene Daten mit bestimmten Methoden korrigieren. Eine erste ist die **Data Stratification** (Datenschichtung). Durch diese Technik wird erreicht, dass der kleinere Datensatz die gleiche statistische Aufschlüsselung aufweist wie der grössere. Wir können die Schichtung auf unsere Abwanderungsspalte anwenden und so sicherstellen, dass alle Stichproben die wir ziehen, in etwa die Verteilung des Hauptdatensatzes repräsentieren. Die zweite Technik ist das **Up-Sampling**, das mit dem `themis`-Paket durchgeführt wird. Bei dieser Technik werden so lange Stichproben gezogen, bis die beiden Teile des Faktors, in unserem Fall «Ja» und «Nein», in ihrer Häufigkeit gleich sind. In diesem Projekt wurden beide Techniken angewandt.
 
 Als nächstes betrachten wir die nicht-booleschen numerischen Variablen genauer. Anhand der Analyse mit `skim()` zu urteilen, liegt keine Normalverteilung vor. Lassen Sie uns daher einen genaueren Blick darauf werfen.
 
@@ -145,18 +148,31 @@ Daraus können wir einige wichtige Schlussfolgerungen ableiten:
 
 Nachdem der grundlegende Überblick über die Daten vorliegt, können wir unser erstes Modell erstellen. Bevor wir dies tun, benötigen wir idealerweise ein Nullmodell. Es geht vielfach vergessen, dass die Erstellung von Modellen ohne einen Bezugspunkt sinnlos ist.
 
+```{r}
+# Auf Klassenungleichgewicht prüfen
+
+table(telco_data$Churn)
+prop.table(table(telco_data$Churn))
+```
+
 ## Das Nullmodell
 
 Als erstes müssen wir unsere Daten aufteilen.
 
 ```{r}
-set.seed(100)
+set.seed(123)
 
-telco_split <- telco_data %>% 
-  initial_split(prop = 0.8)
+telco_split <- 
+  initial_split(data = telco_data, 
+                prop = 0.8, 
+                strata = Churn)
 
 telco_train <- training(telco_split)
 telco_test <- testing(telco_split)
+```
+
+```{r}
+cat(dim(telco_train), dim(telco_test))
 ```
 
 Anschliessend erstellen wir ein sehr einfaches Nullmodell. Im Wesentlichen geht es von der Nullhypothese aus, dass der Kunde nicht abwandert. Ausgehend von der 75/25-Aufteilung des vollständigen Datensatzes können wir annehmen, dass dieses Modell eine Genauigkeit von etwa 75% haben wird. Das ist unsere Vergleichsbasis. Wenn unsere Modelle diesen Wert nicht übertreffen, haben wir ein Problem.
@@ -216,19 +232,20 @@ Im Falle der logistischen Regression liegt der grösste Teil der Arbeit im Rezep
 
 log_reg_recipe <- 
   recipe(Churn ~ ., data = telco_train) %>% 
-  step_upsample(Churn, over_ratio = 1) %>%  # Anzahl der Stichproben für «Ja» 
-                                            # und «Nein» gleich setzen
+  # Anzahl der Stichproben für «Ja» und «Nein» gleich setzen; Alternative: step_downsample()
+  step_upsample(Churn, over_ratio = 1) %>%  
   update_role(customerID, new_role = "id") %>% 
   step_mutate(SeniorCitizen = as.factor(SeniorCitizen)) %>% 
   step_naomit(everything(), role = TRUE) %>% 
-  step_log(tenure, MonthlyCharges, TotalCharges) %>%  # logarithmische Transformation 
-                                                      # nicht-normaler, numerischer Variablen
-  step_normalize(tenure, MonthlyCharges, TotalCharges) %>%  # z-Standardisierung aller 
-                                                            # numerischen Variablen
+  # logarithmische Transformation nicht-normaler, numerischer Variablen
+  step_log(tenure, MonthlyCharges, TotalCharges) %>%  
+  # z-Standardisierung aller numerischen Variablen
+  step_normalize(tenure, MonthlyCharges, TotalCharges) %>%  
   step_dummy(all_nominal_predictors()) %>% 
-  step_corr(all_numeric_predictors(), threshold = 0.7) %>%  # Hoch korrelierte Variablen entfernen
-  step_zv(all_numeric_predictors())  # Numerische Variablen mit Varianz Null entfernen; 
-                                     # Alternative: step_nzv()
+  # Hoch korrelierte Variablen entfernen; Alternative: all_numeric()
+  step_corr(all_numeric_predictors(), threshold = 0.7) %>%  
+  # Numerische Variablen mit Varianz Null entfernen; Alternative: step_nzv()
+  step_zv(all_numeric_predictors())
 ```
 
 ```{r}
@@ -247,12 +264,12 @@ log_reg_model <-
 ```
 
 ```{r}
-# Workflow erstellen
+# Workflow mit Modell erstellen; Paket "workflows"
 
 log_reg_workflow <- 
   workflow() %>% 
-  add_model(log_reg_model) %>% 
-  add_recipe(log_reg_recipe)
+  add_model(spec = log_reg_model) %>% 
+  add_recipe(recipe = log_reg_recipe)
 ```
 
 Danach folgen die Re-Sampling-Methoden und die Ermittlung von Metriken für unser Modell. Zu diesem Zweck werden zwei Re-Sampling-Methoden angewandt: **Bootstrapping** und **10-Fold Cross Validation** (10-fache Kreuzvalidierung). Schauen wir uns zunächst die Bootstrapping-Methode an.
@@ -275,11 +292,11 @@ telco_bstraps <-
 # Vorhersagen für jede der 5 Stichproben
 
 log_reg_resamples <- 
-  log_reg_workflow %>% 
-  fit_resamples(resamples = telco_bstraps, 
+  fit_resamples(object = log_reg_workflow, 
+                resamples = telco_bstraps, 
                 metrics = my_metrics, 
-                control = control_resamples(save_pred = TRUE)) # Vorhersagen für 
-                                                               # Konfusionsmatrix speichern
+                # Vorhersagen für Konfusionsmatrix speichern
+                control = control_resamples(save_pred = TRUE))
 ```
 
 ```{r}
@@ -317,8 +334,10 @@ Anhand der **Konfusionsmatrix** können wir die Ungenauigkeit des Modells deutli
 Lassen Sie uns die Berechnungen mit einer 10-fachen Kreuzvalidierung durchführen. Wir sehen ziemlich ähnliche Zahlen wie bei der verwendeten Bootstrapping-Methode.
 
 ```{r}
+# Kreuzvalidierung erstellen; Paket "rsample"
+
 telco_folds <- 
-  vfold_cv(data = telco_train, v = 10) # Alternative: v = 3, strata = Churn
+  vfold_cv(data = telco_train, v = 10) # Alternative: v = 3 oder v = 5, strata = Churn
 ```
 
 ```{r}
@@ -328,8 +347,8 @@ keep_pred <- control_resamples(save_pred = TRUE,
 
 ```{r}
 cv_log_reg_res <- 
-  log_reg_workflow %>% 
-  fit_resamples(resamples = telco_folds, 
+  fit_resamples(object = log_reg_workflow, 
+                resamples = telco_folds, 
                 metrics = my_metrics, 
                 control = keep_pred)
 ```
@@ -348,22 +367,24 @@ Das logistische Modell konnte nicht soweit optimiert werden, wie es notwendig w�
 
 ## Random Forest
 
-Ein grosser Unterschied zum logistischen Regressionsmodell besteht in der Vorverarbeitung. Random Forest benötigt hierfür nur sehr wenig. Ein Punkt, den man dafür im Auge behalten muss, sind fehlende Werte. Es gibt einige Strategien, um damit umzugehen, wie z.B. das Entfernen oder die statistische Imputation. Im vorliegenden Fall wird Letzteres umgesetzt und der Mittelwert der Spalte für alle fehlenden Werte verwendet. Dies ist eine gängige Strategie für den Umgang mit fehlenden Werten beim Trainieren eines Modells. Die fehlenden Werte stammten alle aus einer Spalte, TotalCharges.
+Ein grosser Unterschied zum logistischen Regressionsmodell besteht in der Vorverarbeitung. Random Forest benötigt hierfür nur sehr wenig. Ein Punkt, den man dafür im Auge behalten muss, sind fehlende Werte. Es gibt einige Strategien, um damit umzugehen, wie z.B. das Entfernen oder die statistische Imputation. Im vorliegenden Fall wird Letzteres umgesetzt und der Mittelwert der Spalte für alle fehlenden Werte verwendet. Dies ist eine gängige Strategie für den Umgang mit fehlenden Werten beim Trainieren eines Modells. Die fehlenden Werte stammten alle aus der Spalte TotalCharges.
 
 Für Random Forest gibt es wiederum ein Rezept, ein Modell und einen Arbeitsablauf, gleich wie beim logistischen Regressionsmodell.
 
 ```{r}
-# Vorverarbeitungsrezept erstellen
+# Vorverarbeitungsrezept erstellen; Paket "recipes"
 
-set.seed(101)
+set.seed(123)
 
 rf_recipe <- 
   recipe(Churn ~ ., data = telco_train) %>% 
   update_role(customerID, new_role = "id") %>% 
-  step_upsample(Churn, over_ratio = 1) %>%  # Anzahl der Stichproben für «Ja» 
-                                            # und «Nein» gleich setzen
-  step_impute_mean(TotalCharges)  # Verwendung der statistischen Imputation 
-                                  # zur Behandlung fehlender Werte
+  # Anzahl der Stichproben für «Ja» und «Nein» gleich setzen; Alternative: step_downsample()
+  step_upsample(Churn, over_ratio = 1) %>%  
+  # Verwendung der statistischen Imputation zur Behandlung fehlender Werte
+  step_impute_mean(TotalCharges) %>% 
+  # Rezept vorbereiten, dass es für andere Daten verwendet werden kann
+  prep()
 
 # Weitere mögliche Einstellungen:
 # step_normalize(all_numeric_predictors())%>% # Prädiktoren normalisieren
@@ -372,24 +393,19 @@ rf_recipe <-
 ```
 
 ```{r}
-prep(rf_recipe) %>% 
-  bake(new_data = telco_train) # Vorverarbeitete Daten anzeigen
-```
+# Modellspezifikation festlegen; Pakete "parsnip" & "dials"
 
-```{r}
-# Modell erstellen
-
-tune_spec <- 
-  rand_forest(mtry = tune(), 
+model_spec <- 
+  rand_forest(mode = "classification", # Alternative: %>% set_mode("classification")
+              mtry = tune(), 
               trees = tune(), 
               min_n = tune()) %>% 
-  set_engine(engine = "ranger", importance = "permutation") %>%  # Die Wichtigkeit 
-  # auf Permutation setzen für spätere Wichtigkeitsdiagramme; Alternative: "randomForest"
-  set_mode("classification") # Modus-Einstellung
+  # Die Wichtigkeit auf Permutation setzen für spätere Wichtigkeitsdiagramme; Alt.: "impurity"
+  set_engine(engine = "ranger", importance = "permutation")
 ```
 
 ```{r}
-# Ein Raster für die erneute Probenahme einrichten
+# Raster für Stichproben erstellen
 
 tree_grid <- 
   grid_regular(mtry() %>% range_set(c(1, 10)), 
@@ -399,26 +415,30 @@ tree_grid <-
 ```
 
 ```{r}
-# Workflow erstellen
+# Workflow mit Modell erstellen; Paket "workflows"
 
 tuned_wf <- 
   workflow() %>% 
-  add_model(tune_spec) %>% 
-  add_recipe(rf_recipe)
+  add_model(spec = model_spec) %>% 
+  add_recipe(recipe = rf_recipe)
 ```
 
-In den obigen Codeabschnitten werden mehrere Schritte durchlaufen. In `tune_spec` wird ein Random Forest-Modell mit drei Parametern erstellt, die alle auf `tune()` gesetzt sind. Dieser Wert ist ein Platzhalter, mit dem wir uns weiter unten in `tree_grid` beschäftigen. Grundsätzlich geht es darum, eine Reihe von Werten bereitzustellen, aus denen `grid_regular()` auswählt. Die Anzahl der auszuwählenden Werte wird durch `levels` festgelegt. Dies ermöglicht uns, auf einfache Weise eine Vielzahl möglicher Hyperparameterwerte für den von uns gewählten Modelltyp zu testen.
+In den obigen Codeabschnitten werden mehrere Schritte durchlaufen. In `model_spec` wird ein Random Forest-Modell mit drei Parametern erstellt, die alle auf `tune()` gesetzt sind. Dieser Wert ist ein Platzhalter, mit dem wir uns weiter unten in `tree_grid` beschäftigen. Grundsätzlich geht es darum, eine Reihe von Werten bereitzustellen, aus denen `grid_regular()` auswählt. Die Anzahl der auszuwählenden Werte wird durch `levels` festgelegt. Dies ermöglicht uns, auf einfache Weise eine Vielzahl möglicher Hyperparameterwerte für den von uns gewählten Modelltyp zu testen.
 
 Im vorliegenden Beispiel erhält mtry die Werte 1, 5 und 10. Es hat 3 Werte generiert, weil wir `levels = 3` angegeben haben. Wenn wir dies später an eine 10-fache Kreuzvalidierung weitergeben, werden die Modelle mit jedem dieser Werte angepasst und wir können das beste Modell aus dem Stapel auswählen. Dies gilt für jeden der Parameterbereiche und es ist daher darauf zu achten, dass die Rechenzeit nicht aus dem Ruder läuft. Mit Hilfe einer einfachen Kombinatorik erzeugt das vorhandene Raster 3^3^ = 27 Zeilen, wenn man die `levels` auf 5 erhöht, kommt man auf 5^3^ = 125 Zeilen. Für die Kreuzvalidierung bedeutet dies eine Vervierfachung der Berechnungszeit. Seien Sie sich daher immer über den Umfang der Berechnungen im Klaren, die Sie dem Computer zumuten.
 
 ```{r}
+# Modell abstimmen; Paket "tune"
+
 tree_results <- 
-  tuned_wf %>% 
-  tune_grid(resamples = telco_folds, 
-            grid = tree_grid, # Alternative: grid = 10
+  tune_grid(object = tuned_wf, # Workflow, definiert mit den Paketen "parsnip" & "workflows"
+            resamples = telco_folds, # Definiert mit den Paketen "rsample" & "recipes"
+            grid = tree_grid, # Gitterraum, definiert mit dem Paket "dials"; Alt.: grid = 10
+            # Yardstick-Paket zur Definition der Metriken für die Bewertung der Modellleistung
             metrics = metric_set(accuracy, f_meas, roc_auc, specificity), 
+            # Zusätzlich: sensitivity, precision, recall mit Paket "caret"
             control = control_resamples(save_pred = TRUE)) 
-            # Alternative: control_grid(save_pred = TRUE)
+            # Alternative: control_grid(verbose = FALSE/TRUE)
 ```
 
 Da wir unsere Ergebnisse durch Kreuzvalidierung überprüft haben, können wir die Metriken vergleichen. Wir wählen nun das beste Modell aus. Daher betrachten wir die Leistung basierend auf dem Wert von `mtry` für die verschiedenen gewählten Werte der Bäume.
@@ -434,13 +454,14 @@ tree_results %>%
   scale_color_viridis_d(option = "plasma", begin = 0.9, end = 0)
 ```
 
-Es scheint, dass ein `mtry` von 5 ideal ist, um die verschiedenen Metriken auszugleichen. Es ist wichtig, hier die freie Skala zu beachten. Der Wert von `roc_auc` scheint zu sinken, bewegt sich aber kaum mehr als 0.01. `specificity` hingegen sinkt wirklich, je mehr `mtry` steigt. Mit einem `mtry` von 5 maximieren wir unseren F1-Score und die Richtigkeit, während wir für `roc_auc` einen schönen Mittelwert erzielen. Die einzige Möglichkeit, die `specificity` zu maximieren, besteht darin, `mtry` auf 1 zu setzen, was eine schlechte Idee zu sein scheint. `mtry` gibt an, wie viele Prädikatorspalten abgefragt werden. Bei einem Datensatz mit 19 Prädikatoren kommt die Abfrage von nur einem Schätzwert einer Abfrage irreführender Informationen gleich. Es ist bemerkenswert, dass die verschiedenen Baumwerte in ihren Metriken wenig variieren, wobei 50 der schlechteste der drei ist. 175 scheint eine solide Wahl zu sein.
+Es scheint, dass ein `mtry` von 5 ideal ist, um die verschiedenen Metriken auszugleichen. Es ist wichtig, hier die freie Skala zu beachten. Der Wert von `roc_auc` scheint zu sinken, bewegt sich aber kaum mehr als 0.01. `specificity` hingegen sinkt wirklich, je mehr `mtry` steigt. Mit einem `mtry` von 5 maximieren wir unseren `f_meas` (F1-Score) und die Richtigkeit, während wir für `roc_auc` einen schönen Mittelwert erzielen. Die einzige Möglichkeit, die `specificity` zu maximieren, besteht darin, `mtry` auf 1 zu setzen, was eine schlechte Idee zu sein scheint. `mtry` gibt an, wie viele Prädikatorspalten abgefragt werden. Bei einem Datensatz mit 19 Prädikatoren kommt die Abfrage von nur einem Schätzwert einer Abfrage irreführender Informationen gleich. Es ist bemerkenswert, dass die verschiedenen Baumwerte in ihren Metriken wenig variieren, wobei 50 der schlechteste der drei ist. 175 scheint eine solide Wahl zu sein.
 
-Auf der Grundlage einer beliebigen Metrik kann das beste Modell ausgewählt werden. Der Entscheid fällt auf den F1-Score, weil dieser eine solide Metrik zur Bewertung der Modell-Leistung ist.
+Auf der Grundlage einer beliebigen Metrik kann das beste Modell ausgewählt werden. Der Entscheid fällt auf den `f_meas`, weil dieser eine solide Metrik zur Bewertung der Modell-Leistung ist.
 
 ```{r}
 tree_results %>% 
-  show_best(n = 10)
+  show_best(metric = "f_meas", 
+            n = 10)
 ```
 
 ```{r}
@@ -463,7 +484,7 @@ tree_results %>%
   filter(mtry == 5, trees == 175, min_n == 6)
 ```
 
-Wir kommen zum letzten Schritt, dem Testen unseres Modells auf dem Test-Datensatz. `last_fit()` verwendet das ursprüngliche Split-Objekt, passt das Modell an den Trainingssplit an und evaluiert es automatisch anhand des Test-Splits. Das ist sehr praktisch und wir können alle abschliessenden Schritte anhand der Ergebnisse durchführen. Zuerst sammeln wir jedoch zwei grundlegende Metriken.
+Wir kommen zum letzten Schritt, dem Testen unseres Modells auf dem Test-Datensatz. `last_fit()` verwendet das ursprüngliche Split-Objekt, passt das Modell an den Trainings-Split an und evaluiert es automatisch anhand des Test-Splits. Das ist sehr praktisch und wir können alle abschliessenden Schritte anhand der Ergebnisse durchführen. Zuerst sammeln wir jedoch zwei grundlegende Metriken.
 
 ```{r}
 # Das Modell wird an den vollständigen Trainingssatz angepasst 
@@ -475,8 +496,8 @@ final_fit <-
 
 # Alternative:
 # workflow() %>%
-# add_recipe(recipe) %>%
-# add_model(final_model) %>%
+# add_model(spec = final_model) %>%
+# add_recipe(recipe = recipe) %>%
 # last_fit(data_split)
 ```
 
@@ -497,7 +518,7 @@ Wenn wir uns die Metriken des besten Baums ansehen, sehen wir fast identische Me
 Es gibt drei weitere Dinge, die wir untersuchen können: ein Diagramm unserer ROC-Kurve, eine Konfusionsmatrix und ein Diagramm der Variablenbedeutung.
 
 ```{r}
-# Erstellen einer ROC-Kurve für unsere endgültige Anpassung
+# ROC-Kurve für die endgültige Anpassung erstellen
 
 final_fit %>% 
   collect_predictions() %>% 
@@ -510,29 +531,115 @@ Die Kurve zeigt die `sensitivity` und `specificity` für verschiedene Schwellenw
 ```{r}
 # Konfusionsmatrix
 
-# table(preds$Churn, preds$.pred_class)
+final_pred <- 
+  final_fit %>% 
+  unnest(.predictions)
+
+confusionMatrix(final_pred$.pred_class, telco_test$Churn)
+# Alternative: table(final_pred$.pred_class, telco_test$Churn)
 ```
 
 ```{r}
-# Variablen-Bedeutungsdiagramm
+# Globales Variablen-Bedeutungsdiagramm erstellen
 
 final_fit %>% 
   extract_workflow() %>% 
   extract_fit_parsnip() %>% 
-  vip()
+  vip() +
+  ggtitle("Globale Bedeutung der Variablen") +
+  ylab("Bedeutung")
 
 # Alternative:
-# final_wf %>%
+# final_fit %>%
 # extract_fit_parsnip() %>%
 # vip() +
 # ggtitle("Feature Importance") +
 # theme(title = element_text(size = 20),
 # axis.text.y.left = element_text(size = 20))
-
-# lime-Paket
 ```
 
 Dem Diagramm können wir entnehmen, dass - zumindest nach der Art und Weise, wie wir unser Modell aufgebaut haben - die Vertragslaufzeit, die Gesamtkosten und die monatlichen Kosten die wichtigsten Prädiktoren für die Kundenabwanderung sind. Wir haben diese Faktoren bereits in unseren Diagrammen weiter oben im Bericht gesehen. Daher ist es nicht überraschend, dass sie sich als gute Prädiktoren erweisen.
+
+```{r}
+final_pred %>% 
+  select(.pred_Yes, 
+         .pred_No, 
+         .pred_class) %>% 
+  slice(1:4) %>% 
+  rename("P Yes" = .pred_Yes, 
+         "P No" = .pred_No, 
+         "FCST Klasse" = .pred_class)
+```
+
+```{r}
+model <- 
+  fit(final_wf, 
+      telco_train)
+```
+
+```{r}
+pred_test <- 
+  predict(object = model, 
+          new_data = telco_test %>% select(-Churn)) %>% 
+  bind_cols(true = telco_test$Churn)
+```
+
+```{r}
+pred_test %>% 
+  summarise(accuracy = accuracy_vec(true, .pred_class), 
+            sensitivity = sens_vec(true, .pred_class), 
+            precision = precision_vec(true, .pred_class), 
+            specificity = spec_vec(true, .pred_class))
+```
+
+```{r}
+# Lokales, modell-agnostisches Variablen-Bedeutungsdiagramm erstellen
+
+telco_train_num <- telco_train
+telco_train_num$Churn <- 
+  recode_factor(telco_train$Churn, 
+                Yes = 1, 
+                No = 0)
+telco_train_num$Churn <- as.numeric(as.character(telco_train_num$Churn))
+```
+
+```{r}
+# Explainer erstellen
+
+explainer <- 
+  explain_tidymodels(
+    model = model, 
+    data = telco_train_num %>% select(-Churn), 
+    y = telco_train_num %>% pull(Churn), 
+    label = "rf"
+  )
+```
+
+```{r}
+model_type.dalex_explainer <- DALEXtra::model_type.dalex_explainer
+predict_model.dalex_explainer <- DALEXtra::predict_model.dalex_explainer
+
+explanation <- 
+  predict_surrogate(explainer = explainer, 
+                    new_observation = telco_test[1:4, ] %>% 
+                    select(-Churn), 
+                    n_features = 10, 
+                    n_permutations = 1000, 
+                    type = "lime")
+```
+
+```{r}
+explanation %>% 
+  select(model_r2, model_prediction, prediction) %>% 
+  distinct()
+```
+
+```{r}
+plot(explanation) + 
+  ggtitle("Bedeutung der Variablen") + 
+  xlab("Merkmale") +
+  ylab("Gewichtung")
+```
 
 ## Quarto
 
