@@ -277,8 +277,7 @@ Danach folgen die Re-Sampling-Methoden und die Ermittlung von Metriken für unse
 ```{r}
 # Auflistung von relevanten Metriken
 
-my_metrics <- metric_set(accuracy, sensitivity, specificity, precision, recall, 
-                         f_meas, roc_auc)
+my_metrics <- metric_set(accuracy, f_meas, roc_auc)
 ```
 
 ```{r}
@@ -382,13 +381,13 @@ rf_recipe <-
   # Anzahl der Stichproben für «Ja» und «Nein» gleich setzen; Alternative: step_downsample()
   step_upsample(Churn, over_ratio = 1) %>%  
   # Verwendung der statistischen Imputation zur Behandlung fehlender Werte
-  step_impute_mean(TotalCharges) %>% 
+  step_impute_mean(TotalCharges) 
   # Rezept vorbereiten, dass es für andere Daten verwendet werden kann
-  prep()
+  # %>% prep()
 
 # Weitere mögliche Einstellungen:
-# step_normalize(all_numeric_predictors())%>% # Prädiktoren normalisieren
-# step_corr(all_numeric_predictors())%>% # Hoch korrelierte Variablen entfernen
+# step_normalize(all_numeric_predictors()) %>% # Prädiktoren normalisieren
+# step_corr(all_numeric_predictors()) %>% # Hoch korrelierte Variablen entfernen
 # step_nzv(all_numeric_predictors()) # Numerische Variablen mit nahezu Varianz Null entfernen
 ```
 
@@ -399,13 +398,21 @@ model_spec <-
   rand_forest(mode = "classification", # Alternative: %>% set_mode("classification")
               mtry = tune(), 
               trees = tune(), 
-              min_n = tune()) %>% 
+              min_n = tune()
+              ) %>% 
   # Die Wichtigkeit auf Permutation setzen für spätere Wichtigkeitsdiagramme; Alt.: "impurity"
   set_engine(engine = "ranger", importance = "permutation")
 ```
 
 ```{r}
-# Raster für Stichproben erstellen
+# Tune-Parameter vorgängig auskommentieren
+
+# model_spec %>% 
+  # fit(Churn ~ ., data = telco_train)
+```
+
+```{r}
+# Raster erstellen
 
 tree_grid <- 
   grid_regular(mtry() %>% range_set(c(1, 10)), 
@@ -415,7 +422,7 @@ tree_grid <-
 ```
 
 ```{r}
-# Workflow mit Modell erstellen; Paket "workflows"
+# Workflow mit Rezept und Modell erstellen; Paket "workflows"
 
 tuned_wf <- 
   workflow() %>% 
@@ -435,9 +442,9 @@ tree_results <-
             resamples = telco_folds, # Definiert mit den Paketen "rsample" & "recipes"
             grid = tree_grid, # Gitterraum, definiert mit dem Paket "dials"; Alt.: grid = 10
             # Yardstick-Paket zur Definition der Metriken für die Bewertung der Modellleistung
-            metrics = metric_set(accuracy, f_meas, roc_auc, specificity), 
+            metrics = metric_set(accuracy, f_meas, roc_auc), 
             # Zusätzlich: sensitivity, precision, recall mit Paket "caret"
-            control = control_resamples(save_pred = TRUE)) 
+            control = control_resamples(save_pred = TRUE))
             # Alternative: control_grid(verbose = FALSE/TRUE)
 ```
 
@@ -467,7 +474,7 @@ tree_results %>%
 ```{r}
 best_tree <- 
   tree_results %>% 
-  select_best("f_meas") # Alternative: "accuracy"
+  select_best(metric = "f_meas") # Alternative: "accuracy"
 ```
 
 ```{r}
