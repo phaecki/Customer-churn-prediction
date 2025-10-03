@@ -1,4 +1,3 @@
-# Customer-churn-prediction
 Verfahren zur Entwicklung eines Modells für maschinelles Lernen, mit dem die Abwanderung/Fluktuation von Kunden vorhergesagt werden kann. Der Prozess umfasst eine einfache Datenexploration/-analyse, bevor zwei Modelle trainiert und getestet werden. Die spezifische Aufgabe ist die Klassifizierung, d.h. die Vorhersage, welche Kunden abwandern werden und welche nicht. Es wurden zwei Modelle ausgewählt, die üblicherweise für die Klassifizierung verwendet werden: logistische Regression und Random Forest.
 
 Process for developing a machine learning model to predict customer churn or attrition. The process involves simple data exploration/analysis before training and testing two models. The specific task is classification, i.e. predicting which customers will churn and which will not. Two models commonly used for classification were chosen: logistic regression and random forest.
